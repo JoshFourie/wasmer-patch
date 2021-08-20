@@ -8,7 +8,7 @@ use crate::js::error::CompileError;
 use crate::js::error::WasmError;
 use crate::js::RuntimeError;
 use crate::js::module_info_polyfill::translate_module;
-use js_sys::{Reflect, Uint8Array, WebAssembly};
+use js_sys::{Reflect, Object, Uint8Array, WebAssembly};
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -232,46 +232,64 @@ impl Module {
         }
     }
 
-    pub(crate) fn instantiate(
-        &self,
-        resolver: &dyn Resolver,
-    ) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> {
-        let imports = js_sys::Object::new();
-        let mut functions: Vec<VMFunction> = vec![];
-        for (i, import_type) in self.imports().enumerate() {
-            let resolved_import =
-                resolver.resolve(i as u32, import_type.module(), import_type.name());
-            if let Some(import) = resolved_import {
-                let val = js_sys::Reflect::get(&imports, &import_type.module().into())?;
-                if !val.is_undefined() {
-                    // If the namespace is already set
-                    js_sys::Reflect::set(&val, &import_type.name().into(), import.as_jsvalue())?;
-                } else {
-                    // If the namespace doesn't exist
-                    let import_namespace = js_sys::Object::new();
-                    js_sys::Reflect::set(
-                        &import_namespace,
-                        &import_type.name().into(),
-                        import.as_jsvalue(),
-                    )?;
-                    js_sys::Reflect::set(
-                        &imports,
-                        &import_type.module().into(),
-                        &import_namespace.into(),
-                    )?;
-                }
-                if let Export::Function(func) = import {
-                    functions.push(func);
-                }
+    pub(crate) fn instantiate(&self, resolver: &dyn Resolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
+    {
+        let imports: Object = Object::new();
+
+        let mut functions: Vec<VMFunction> = Vec::new();
+
+        for (idx, import_type) in self.imports().enumerate()
+        {
+            let module: &str = import_type.module();  // e.g. "wbg"
+            
+            let name: &str = import_type.name();  // e.g. "__wbg_getcounter_2d994047dff704ba"
+
+            let import: Export = resolver
+                .resolve(idx as u32, module, name)
+                .expect("js error: could not get import.");
+
+            // set the namespace for this import
+                
+            let value: JsValue = Reflect::get(
+                &imports, 
+                &name.into()
+            )?;
+
+            if value.is_undefined()
+            {
+                let namespace: Object = Object::new();
+
+                Reflect::set(
+                    &namespace,
+                    &name.into(),
+                    import.as_jsvalue()
+                )?;  // e.g. set <namespace> { "__wbg_getcounter_2d994047dff704ba" : <JsValue> }
+
+                Reflect::set(
+                    &imports,
+                    &module.into(),
+                    &namespace.into()
+                )?;  // e.g. set <imports> { "wbg" : <namespace> }
+
+            } else {
+                Reflect::set(
+                    &value,
+                    &name.into(),
+                    import.as_jsvalue()
+                )?;  // e.g. set 
             }
-            // in case the import is not found, the JS Wasm VM will handle
-            // the error for us, so we don't need to handle it
+
+            // if import is a function, push it to the function stack
+
+            if let Export::Function(function) = import 
+            {
+                functions.push(function)
+            }
         }
-        Ok((
-            WebAssembly::Instance::new(&self.module, &imports)
-                .map_err(|e: JsValue| -> RuntimeError { e.into() })?,
-            functions,
-        ))
+
+        let instance: _ = WebAssembly::Instance::new(&self.module, &imports)?;
+
+        Ok((instance, functions))
     }
 
     /// Returns the name of the current module.
