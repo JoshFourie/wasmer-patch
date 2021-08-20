@@ -7,6 +7,7 @@ use crate::js::error::CompileError;
 #[cfg(feature = "wat")]
 use crate::js::error::WasmError;
 use crate::js::RuntimeError;
+use crate::js::module_info_polyfill::translate_module;
 use js_sys::{Reflect, Uint8Array, WebAssembly};
 use std::fmt;
 use std::io;
@@ -16,7 +17,7 @@ use thiserror::Error;
 use wasm_bindgen::JsValue;
 use wasmer_types::{
     ExportsIterator, ExternType, FunctionType, GlobalType, ImportsIterator, MemoryType, Mutability,
-    Pages, TableType, Type,
+    Pages, TableType, Type, ModuleInfo
 };
 
 #[derive(Debug)]
@@ -152,49 +153,69 @@ impl Module {
         unsafe { Self::from_binary_unchecked(store, binary) }
     }
 
+    ///
+    pub fn from_module(store: &Store, module: WebAssembly::Module, info: ModuleInfo) -> Result<Self, CompileError> 
+    {
+        // The module is now validated, so we can safely parse it's types
+        #[cfg(feature = "wasm-types-polyfill")]
+        let (type_hints, name): (Option<ModuleTypeHints>, Option<String>) = 
+        {
+            let imports: Vec<_> = info
+                .imports()
+                .map(|import| 
+                {
+                    import.ty().clone()
+                })
+                .collect();
+
+            let exports: Vec<_> = info
+                .exports()
+                .map(|export| 
+                {
+                    export.ty().clone()
+                })
+                .collect();
+
+            let type_hints: _ = ModuleTypeHints { imports, exports };
+
+            (Some(type_hints), info.name)
+        };
+
+        #[cfg(not(feature = "wasm-types-polyfill"))]
+        let (type_hints, name) = (None, None);
+
+        let wasmer_module: Self = Self 
+        {
+            store: store.clone(),
+            module,
+            type_hints,
+            name
+        };
+
+        Ok(wasmer_module)
+    }
+
     /// Creates a new WebAssembly module skipping any kind of validation.
     ///
     /// # Safety
     ///
     /// This is safe since the JS vm should be safe already.
     /// We maintain the `unsafe` to preserve the same API as Wasmer
-    pub unsafe fn from_binary_unchecked(
-        store: &Store,
-        binary: &[u8],
-    ) -> Result<Self, CompileError> {
-        let js_bytes = Uint8Array::view(binary);
-        let module = WebAssembly::Module::new(&js_bytes.into()).unwrap();
+    pub unsafe fn from_binary_unchecked(store: &Store, binary: &[u8]) -> Result<Self, CompileError> 
+    {
+        let info: ModuleInfo = Self::info(binary).expect("failed to translate binary into module info.");
 
-        // The module is now validated, so we can safely parse it's types
-        #[cfg(feature = "wasm-types-polyfill")]
-        let (type_hints, name) = {
-            let info = crate::js::module_info_polyfill::translate_module(binary).unwrap();
+        let js_bytes: JsValue = Uint8Array::view(binary).into();
 
-            (
-                Some(ModuleTypeHints {
-                    imports: info
-                        .info
-                        .imports()
-                        .map(|import| import.ty().clone())
-                        .collect::<Vec<_>>(),
-                    exports: info
-                        .info
-                        .exports()
-                        .map(|export| export.ty().clone())
-                        .collect::<Vec<_>>(),
-                }),
-                info.info.name,
-            )
-        };
-        #[cfg(not(feature = "wasm-types-polyfill"))]
-        let (type_hints, name) = (None, None);
+        let module: _ = WebAssembly::Module::new(&js_bytes).expect("failed to build bytes into WebAssembly.Module");
 
-        Ok(Self {
-            store: store.clone(),
-            module,
-            type_hints,
-            name,
-        })
+        Self::from_module(store, module, info)
+    }
+
+    ///
+    pub fn info(binary: &[u8]) -> Result<ModuleInfo, String>
+    {
+        Ok(translate_module(binary)?.info)
     }
 
     /// Validates a new WebAssembly Module given the configuration
