@@ -8,7 +8,7 @@ use crate::js::error::CompileError;
 use crate::js::error::WasmError;
 use crate::js::RuntimeError;
 use crate::js::module_info_polyfill::translate_module;
-use js_sys::{Array, Reflect, Object, Uint8Array, WebAssembly};
+use js_sys::{Promise, Array, Reflect, Object, Uint8Array, WebAssembly};
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -212,6 +212,7 @@ impl Module {
         Self::from_module(store, module, info)
     }
 
+
     ///
     pub fn info(binary: &[u8]) -> Result<ModuleInfo, String>
     {
@@ -232,27 +233,33 @@ impl Module {
         }
     }
 
-    pub(crate) fn instantiate(&self, resolver: &dyn Resolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
+    pub(crate) fn resolve_imports(&self, resolver: &dyn Resolver, import_types: Vec<(u32, ImportType)>) -> Result<(Object, Vec<VMFunction>), RuntimeError> 
     {
         let imports: Object = Object::new();
 
         let mut functions: Vec<VMFunction> = Vec::new();
 
-        for (idx, import_type) in self.imports().enumerate()
+        for (index, import_type) in import_types
         {
-            let module: &str = import_type.module();  // e.g. "wbg"
-            
-            let name: &str = import_type.name();  // e.g. "__wbg_getcounter_2d994047dff704ba"
+            // resolve import_type into import
 
             let import: Export = resolver
-                .resolve(idx as u32, module, name)
+                .resolve(
+                    index, 
+                    import_type.module(), 
+                    import_type.name()
+                )
                 .expect("js error: could not get import.");
 
             // set the namespace for this import
+
+            let module: JsValue = import_type.module().into();  // e.g. "wbg"
+            
+            let name: JsValue = import_type.name().into();  // e.g. "__wbg_getcounter_2d994047dff704ba"
                 
             let value: JsValue = Reflect::get(
                 &imports, 
-                &name.into()
+                &name
             )?;
 
             if value.is_undefined()
@@ -261,20 +268,20 @@ impl Module {
 
                 Reflect::set(
                     &namespace,
-                    &name.into(),
+                    &name,
                     import.as_jsvalue()
                 )?;  // e.g. set <namespace> { "__wbg_getcounter_2d994047dff704ba" : <JsValue> }
 
                 Reflect::set(
                     &imports,
-                    &module.into(),
+                    &module,
                     &namespace.into()
                 )?;  // e.g. set <imports> { "wbg" : <namespace> }
 
             } else {
                 Reflect::set(
                     &value,
-                    &name.into(),
+                    &name,
                     import.as_jsvalue()
                 )?;  // e.g. set 
             }
@@ -286,6 +293,22 @@ impl Module {
                 functions.push(function)
             }
         }
+
+        Ok((imports, functions))
+    }
+
+    pub(crate) fn instantiate(&self, resolver: &dyn Resolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
+    {
+        let import_types: Vec<(u32, ImportType)> = self
+            .imports()
+            .enumerate()
+            .map(|(index, import_type): (usize, ImportType)| 
+            {
+                (index as u32, import_type)
+            })
+            .collect();
+
+        let (imports, functions) = self.resolve_imports(resolver, import_types)?;
 
         let instance: _ = WebAssembly::Instance::new(&self.module, &imports)?;
 
