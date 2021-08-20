@@ -8,7 +8,7 @@ use crate::js::error::CompileError;
 use crate::js::error::WasmError;
 use crate::js::RuntimeError;
 use crate::js::module_info_polyfill::translate_module;
-use js_sys::{Reflect, Object, Uint8Array, WebAssembly};
+use js_sys::{Array, Reflect, Object, Uint8Array, WebAssembly};
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -375,47 +375,83 @@ impl Module {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn imports<'a>(&'a self) -> ImportsIterator<impl Iterator<Item = ImportType> + 'a> {
-        let imports = WebAssembly::Module::imports(&self.module);
-        let iter = imports
+    pub fn imports<'a>(&'a self) -> ImportsIterator<impl Iterator<Item = ImportType> + 'a> 
+    {
+        let imports: Array = WebAssembly::Module::imports(&self.module);
+
+        let types: Vec<_> = imports
             .iter()
-            .map(move |val| {
-                let module = Reflect::get(val.as_ref(), &"module".into())
-                    .unwrap()
-                    .as_string()
-                    .unwrap();
-                let field = Reflect::get(val.as_ref(), &"name".into())
-                    .unwrap()
-                    .as_string()
-                    .unwrap();
-                let kind = Reflect::get(val.as_ref(), &"kind".into())
-                    .unwrap()
-                    .as_string()
-                    .unwrap();
-                let extern_type = match kind.as_str() {
-                    "function" => {
-                        let func_type = FunctionType::new(vec![], vec![]);
-                        ExternType::Function(func_type)
-                    }
-                    "global" => {
-                        let global_type = GlobalType::new(Type::I32, Mutability::Const);
-                        ExternType::Global(global_type)
-                    }
-                    "memory" => {
-                        let memory_type = MemoryType::new(Pages(1), None, false);
-                        ExternType::Memory(memory_type)
-                    }
-                    "table" => {
-                        let table_type = TableType::new(Type::FuncRef, 1, None);
-                        ExternType::Table(table_type)
-                    }
-                    _ => unimplemented!(),
+            .map(|import: JsValue| 
+            {
+                let module: String =
+                {
+                    let property: JsValue = "module".into();
+
+                    Reflect::get(&import, &property)
+                        .expect("failed to get 'module' from import.")
+                        .as_string()
+                        .expect("failed to parse 'module' as string.")
                 };
-                ImportType::new(&module, &field, extern_type)
+
+                let field: String =
+                {
+                    let property: JsValue = "name".into();
+
+                    Reflect::get(&import, &property)
+                        .expect("failed to get 'field' from import.")
+                        .as_string()
+                        .expect("failed to parse 'field' as string.")
+                };
+
+                let kind: String =
+                {
+                    let property: JsValue = "kind".into();
+
+                    Reflect::get(&import, &property)
+                        .expect("failed to get 'kind' from import.")
+                        .as_string()
+                        .expect("failed to parse 'kind' as string.")
+                };
+
+                let external_type: ExternType = match kind.as_str()
+                {
+                    "function" => ExternType::Function(
+                        FunctionType::new(
+                            Vec::new(),
+                            Vec::new()
+                        )
+                    ),
+                    "global" => ExternType::Global(
+                        GlobalType::new(
+                            Type::I32,
+                            Mutability::Const
+                        )
+                    ),
+                    "memory" => ExternType::Memory(
+                        MemoryType::new(
+                            Pages(1),  // minimum
+                            None,  // maximum
+                            false   // shared
+                        )
+                    ),
+                    "table" => ExternType::Table(
+                        TableType::new(
+                            Type::FuncRef,
+                            1,  // minimum
+                            None  // maximum
+                        )
+                    ),
+                    _ => unimplemented!("implementation of pattern not found for ExternType.")
+                };
+
+                ImportType::new(&module, &field, external_type)
             })
-            .collect::<Vec<_>>()
-            .into_iter();
-        ImportsIterator::new(iter, imports.length() as usize)
+            .collect();
+
+        ImportsIterator::new(
+            types.into_iter(),
+            imports.length() as usize
+        )
     }
 
     /// Set the type hints for this module.
