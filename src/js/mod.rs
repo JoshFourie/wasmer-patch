@@ -61,7 +61,7 @@ pub use crate::js::module::{Module, ModuleTypeHints};
 pub use crate::js::native::NativeFunc;
 pub use crate::js::ptr::{Array, Item, WasmPtr};
 pub use crate::js::resolver::{
-    ChainableNamedResolver, NamedResolver, NamedResolverChain, Resolver,
+    ChainableNamedResolver, NamedResolver, NamedResolverChain, Resolver, PartiallyTypedResolver, PartiallyTypedImport
 };
 pub use crate::js::trap::RuntimeError;
 

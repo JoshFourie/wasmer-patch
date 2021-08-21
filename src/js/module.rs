@@ -1,5 +1,5 @@
-use crate::js::export::{Export, VMFunction};
-use crate::js::resolver::Resolver;
+use crate::js::export::VMFunction;
+use crate::js::resolver::{PartiallyTypedResolver, PartiallyTypedImport};
 use crate::js::store::Store;
 use crate::js::types::{ExportType, ImportType};
 // use crate::js::InstantiationError;
@@ -8,7 +8,7 @@ use crate::js::error::CompileError;
 use crate::js::error::WasmError;
 use crate::js::RuntimeError;
 use crate::js::module_info_polyfill::translate_module;
-use js_sys::{Promise, Array, Reflect, Object, Uint8Array, WebAssembly};
+use js_sys::{Array, Object, Reflect, Uint8Array, WebAssembly};
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -232,86 +232,25 @@ impl Module {
         }
     }
 
-    pub(crate) fn resolve_imports(resolver: &dyn Resolver, import_types: Vec<(u32, String, String)>) -> Result<(Object, Vec<VMFunction>), RuntimeError> 
+    pub(crate) fn instantiate(&self, resolver: &dyn PartiallyTypedResolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
     {
-        let imports: Object = Object::new();
-
-        let mut functions: Vec<VMFunction> = Vec::new();
-
-        for (index, module, name) in import_types
-        {
-            // resolve import_type into import
-
-            let import: Export = resolver
-                .resolve(
-                    index, 
-                    &module, 
-                    &name
-                )
-                .expect("js error: could not get import.");
-
-            // set the namespace for this import
-
-            let module: JsValue = module.into();  // e.g. "wbg"
-            
-            let name: JsValue = name.into();  // e.g. "__wbg_getcounter_2d994047dff704ba"
-                
-            let value: JsValue = Reflect::get(
-                &imports, 
-                &name
-            )?;
-
-            if value.is_undefined()
-            {
-                let namespace: Object = Object::new();
-
-                Reflect::set(
-                    &namespace,
-                    &name,
-                    import.as_jsvalue()
-                )?;  // e.g. set <namespace> { "__wbg_getcounter_2d994047dff704ba" : <JsValue> }
-
-                Reflect::set(
-                    &imports,
-                    &module,
-                    &namespace.into()
-                )?;  // e.g. set <imports> { "wbg" : <namespace> }
-
-            } else {
-                Reflect::set(
-                    &value,
-                    &name,
-                    import.as_jsvalue()
-                )?;  // e.g. set 
-            }
-
-            // if import is a function, push it to the function stack
-
-            if let Export::Function(function) = import 
-            {
-                functions.push(function)
-            }
-        }
-
-        Ok((imports, functions))
-    }
-
-    pub(crate) fn instantiate(&self, resolver: &dyn Resolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
-    {
-        let import_types: Vec<(u32, String, String)> = self
+        let import_types: Vec<PartiallyTypedImport> = self
             .imports()
-            .enumerate()
-            .map(|(index, import_type): (usize, ImportType)| 
+            .map(|import_type: ImportType| 
             {
                 let module: String = import_type.module().into();
 
                 let name: String = import_type.name().into();
 
-                (index as u32, module, name)
+                PartiallyTypedImport { module, name }
             })
             .collect();
 
-        let (imports, functions) = Self::resolve_imports(resolver, import_types)?;
+        let (imports, functions): (Object, Vec<VMFunction>) = resolver
+            .resolve_imports(import_types)
+            .ok_or({
+                RuntimeError::new("failed to resolve imports.")
+            })?;
 
         let instance: _ = WebAssembly::Instance::new(&self.module, &imports)?;
 

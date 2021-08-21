@@ -1,4 +1,6 @@
-use crate::js::export::Export;
+use crate::js::export::{Export, VMFunction};
+
+use js_sys::Object;
 
 /// Import resolver connects imports with available exported values.
 pub trait Resolver {
@@ -22,6 +24,22 @@ pub trait Resolver {
     /// )
     /// ```
     fn resolve(&self, _index: u32, module: &str, field: &str) -> Option<Export>;
+}
+
+///
+pub struct PartiallyTypedImport
+{
+    ///
+    pub name: String,
+    ///
+    pub module: String
+}
+
+///
+pub trait PartiallyTypedResolver
+{
+    ///
+    fn resolve_imports(&self, types: Vec<PartiallyTypedImport>) -> Option<(Object, Vec<VMFunction>)>;
 }
 
 /// Import resolver connects imports with available exported values.

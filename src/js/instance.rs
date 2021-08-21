@@ -3,7 +3,7 @@ use crate::js::export::{Export, VMFunction};
 use crate::js::exports::Exports;
 use crate::js::externals::Extern;
 use crate::js::module::Module;
-use crate::js::resolver::Resolver;
+use crate::js::resolver::{PartiallyTypedImport, PartiallyTypedResolver};
 use crate::js::store::Store;
 use crate::js::trap::RuntimeError;
 use js_sys::{WebAssembly, Reflect, Object, Promise};
@@ -95,7 +95,7 @@ impl Instance {
     /// Those are, as defined by the spec:
     ///  * Link errors that happen when plugging the imports into the instance
     ///  * Runtime errors that happen when running the module `start` function.
-    pub fn new(module: &Module, resolver: &dyn Resolver) -> Result<Self, InstantiationError> 
+    pub fn new(module: &Module, resolver: &dyn PartiallyTypedResolver) -> Result<Self, InstantiationError> 
     {
         let (instance, functions) = module
             .instantiate(resolver)
@@ -105,9 +105,9 @@ impl Instance {
     }
 
     ///
-    pub async fn from_promise(store: Store, promise: &Promise, resolver: &dyn Resolver, import_types: Vec<(u32, String, String)>) -> Result<(Self, Module), InstantiationError>
+    pub async fn from_promise(store: Store, promise: &Promise, resolver: &dyn PartiallyTypedResolver, import_types: Vec<PartiallyTypedImport>) -> Result<(Self, Module), InstantiationError>
     {
-        let (imports, functions): (Object, Vec<_>) = Module::resolve_imports(resolver, import_types).expect("failed to resolve imports.");
+        let (imports, functions): (Object, Vec<_>) = resolver.resolve_imports(import_types).expect("failed to resolve imports");
 
         let stream: Promise = WebAssembly::instantiate_streaming(promise, &imports);  // Promise { obj: Result { module: WebAssembly.Module, instance: WebAssemblyInstance } }
 

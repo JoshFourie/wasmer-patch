@@ -1,13 +1,16 @@
 //! The import module contains the implementation data structures and helper functions used to
 //! manipulate and access a wasm module's imports including memories, tables, globals, and
 //! functions.
-use crate::js::export::Export;
-use crate::js::resolver::NamedResolver;
+use crate::js::export::{Export, VMFunction};
+use crate::js::resolver::{Resolver, NamedResolver, PartiallyTypedResolver, PartiallyTypedImport};
 use std::borrow::{Borrow, BorrowMut};
 use std::collections::VecDeque;
 use std::collections::{hash_map::Entry, HashMap};
 use std::fmt;
 use std::sync::{Arc, Mutex};
+
+use js_sys::{Reflect, Object};
+use wasm_bindgen::JsValue;
 
 /// The `LikeNamespace` trait represents objects that act as a namespace for imports.
 /// For example, an `Instance` or `Namespace` could be
@@ -176,6 +179,73 @@ impl fmt::Debug for ImportObject {
                 &SecretMap::new(self.map.lock().unwrap().borrow().len()),
             )
             .finish()
+    }
+}
+
+impl PartiallyTypedResolver for ImportObject
+{
+    fn resolve_imports(&self, types: Vec<PartiallyTypedImport>) -> Option<(Object, Vec<VMFunction>)>
+    {
+        let imports: Object = Object::new();
+
+        let mut functions: Vec<VMFunction> = Vec::new();
+
+        for import_type in types
+        {
+            // resolve import_type into import
+
+            let import: Export = self
+                .resolve(
+                    0,
+                    &import_type.module, 
+                    &import_type.name
+                )
+                .expect("js error: could not get import.");
+
+            // set the namespace for this import
+
+            let module: JsValue = import_type.module.into();  // e.g. "wbg"
+            
+            let name: JsValue = import_type.name.into();  // e.g. "__wbg_getcounter_2d994047dff704ba"
+                
+            let value: JsValue = Reflect::get(
+                &imports, 
+                &name
+            ).ok()?;
+
+            if value.is_undefined()
+            {
+                let namespace: Object = Object::new();
+
+                Reflect::set(
+                    &namespace,
+                    &name,
+                    import.as_jsvalue()
+                ).ok()?;  // e.g. set <namespace> { "__wbg_getcounter_2d994047dff704ba" : <JsValue> }
+
+                Reflect::set(
+                    &imports,
+                    &module,
+                    &namespace.into()
+                ).ok()?;  // e.g. set <imports> { "wbg" : <namespace> }
+
+            } else {
+                Reflect::set(
+                    &value,
+                    &name,
+                    import.as_jsvalue()
+                ).ok()?;  // e.g. set 
+            }
+
+            // if import is a function, push it to the function stack
+
+            if let Export::Function(function) = import 
+            {
+                functions.push(function)
+            }
+        }
+
+        Some((imports, functions))
     }
 }
 
