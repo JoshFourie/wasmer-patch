@@ -233,29 +233,29 @@ impl Module {
         }
     }
 
-    pub(crate) fn resolve_imports(&self, resolver: &dyn Resolver, import_types: Vec<(u32, ImportType)>) -> Result<(Object, Vec<VMFunction>), RuntimeError> 
+    pub(crate) fn resolve_imports(resolver: &dyn Resolver, import_types: Vec<(u32, String, String)>) -> Result<(Object, Vec<VMFunction>), RuntimeError> 
     {
         let imports: Object = Object::new();
 
         let mut functions: Vec<VMFunction> = Vec::new();
 
-        for (index, import_type) in import_types
+        for (index, module, name) in import_types
         {
             // resolve import_type into import
 
             let import: Export = resolver
                 .resolve(
                     index, 
-                    import_type.module(), 
-                    import_type.name()
+                    &module, 
+                    &name
                 )
                 .expect("js error: could not get import.");
 
             // set the namespace for this import
 
-            let module: JsValue = import_type.module().into();  // e.g. "wbg"
+            let module: JsValue = module.into();  // e.g. "wbg"
             
-            let name: JsValue = import_type.name().into();  // e.g. "__wbg_getcounter_2d994047dff704ba"
+            let name: JsValue = name.into();  // e.g. "__wbg_getcounter_2d994047dff704ba"
                 
             let value: JsValue = Reflect::get(
                 &imports, 
@@ -299,16 +299,20 @@ impl Module {
 
     pub(crate) fn instantiate(&self, resolver: &dyn Resolver) -> Result<(WebAssembly::Instance, Vec<VMFunction>), RuntimeError> 
     {
-        let import_types: Vec<(u32, ImportType)> = self
+        let import_types: Vec<(u32, String, String)> = self
             .imports()
             .enumerate()
             .map(|(index, import_type): (usize, ImportType)| 
             {
-                (index as u32, import_type)
+                let module: String = import_type.module().into();
+
+                let name: String = import_type.name().into();
+
+                (index as u32, module, name)
             })
             .collect();
 
-        let (imports, functions) = self.resolve_imports(resolver, import_types)?;
+        let (imports, functions) = Self::resolve_imports(resolver, import_types)?;
 
         let instance: _ = WebAssembly::Instance::new(&self.module, &imports)?;
 
