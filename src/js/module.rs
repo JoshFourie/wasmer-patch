@@ -212,7 +212,6 @@ impl Module {
         Self::from_module(store, module, info)
     }
 
-
     ///
     pub fn info(binary: &[u8]) -> Result<ModuleInfo, String>
     {
@@ -598,6 +597,16 @@ impl Module {
     /// Returns the [`Store`] where the `Instance` belongs.
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// 
+    pub fn swap_store(&mut self, store: Store) -> Store
+    {
+        let tmp: Store = self.store.clone();
+
+        self.store = store;
+
+        tmp
     }
 }
 
