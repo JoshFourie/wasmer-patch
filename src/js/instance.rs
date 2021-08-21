@@ -1,12 +1,15 @@
 use crate::js::env::HostEnvInitError;
-use crate::js::export::Export;
+use crate::js::export::{Export, VMFunction};
 use crate::js::exports::Exports;
 use crate::js::externals::Extern;
 use crate::js::module::Module;
 use crate::js::resolver::Resolver;
 use crate::js::store::Store;
 use crate::js::trap::RuntimeError;
-use js_sys::WebAssembly;
+use js_sys::{WebAssembly, Reflect, Object, Promise};
+use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen::JsValue;
+use wasmer_types::ExternType;
 use std::fmt;
 #[cfg(feature = "std")]
 use thiserror::Error;
@@ -92,34 +95,93 @@ impl Instance {
     /// Those are, as defined by the spec:
     ///  * Link errors that happen when plugging the imports into the instance
     ///  * Runtime errors that happen when running the module `start` function.
-    pub fn new(module: &Module, resolver: &dyn Resolver) -> Result<Self, InstantiationError> {
-        let store = module.store();
+    pub fn new(module: &Module, resolver: &dyn Resolver) -> Result<Self, InstantiationError> 
+    {
         let (instance, functions) = module
             .instantiate(resolver)
             .map_err(|e| InstantiationError::Start(e))?;
-        let instance_exports = instance.exports();
-        let exports = module
+            
+        Self::link_instance(module, instance, functions)
+    }
+
+    ///
+    pub async fn from_promise(store: Store, promise: &Promise, resolver: &dyn Resolver, import_types: Vec<(u32, String, String)>) -> Result<(Self, Module), InstantiationError>
+    {
+        let (imports, functions): (Object, Vec<_>) = Module::resolve_imports(resolver, import_types).expect("failed to resolve imports.");
+
+        let stream: Promise = WebAssembly::instantiate_streaming(promise, &imports);  // Promise { obj: Result { module: WebAssembly.Module, instance: WebAssemblyInstance } }
+
+        let result: JsValue = JsFuture::from(stream) // Result { module: WebAssembly.Module, instance: WebAssemblyInstance }
+            .await
+            .expect("failed to await promise of Web Assembly module.");
+
+        let wasm_instance: WebAssembly::Instance = Reflect::get(
+            &result, 
+            &"instance".into()
+        )
+        .expect("failed to get instance from result.")
+        .into();
+
+        let wasm_module: WebAssembly::Module = Reflect::get(
+            &result,
+            &"module".into()
+        )
+        .expect("failed to get module from result.")
+        .into();
+
+        let mut wasmer_module: Module = Module::from(wasm_module);
+
+        wasmer_module.swap_store(store);
+
+        let wasmer_instance: Instance = Self::link_instance(&wasmer_module, wasm_instance, functions)?;
+
+        Ok((wasmer_instance, wasmer_module))
+    }
+
+    fn link_instance(module: &Module, instance: WebAssembly::Instance, functions: Vec<VMFunction>) -> Result<Self, InstantiationError>
+    {
+        let instance_exports: Object = instance.exports();
+
+        let store: &Store = module.store();
+
+        let module_exports: Exports = module
             .exports()
-            .map(|export_type| {
-                let name = export_type.name();
-                let extern_type = export_type.ty().clone();
-                let js_export = js_sys::Reflect::get(&instance_exports, &name.into()).unwrap();
+            .map(|export_type| 
+            {
+                let name: &str = export_type.name();
+
+                let extern_type: ExternType = export_type.ty().clone();
+
+                let js_export: JsValue = js_sys::Reflect::get(
+                    &instance_exports, 
+                    &name.into()
+                ).expect("failed to get export from instance exports.");
+
                 let export: Export = (js_export, extern_type).into();
+
                 let extern_ = Extern::from_vm_export(store, export);
+
                 (name.to_string(), extern_)
             })
-            .collect::<Exports>();
+            .collect();
 
-        let self_instance = Self {
+        let wrapped_instance = Self {
             module: module.clone(),
-            instance,
-            exports,
+            exports: module_exports,
+            instance
         };
-        for func in functions {
-            func.init_envs(&self_instance)
-                .map_err(|e| InstantiationError::HostEnvInitialization(e))?;
+
+        for function in functions
+        {
+            function
+                .init_envs(&wrapped_instance)
+                .map_err(|error| 
+                {
+                    InstantiationError::HostEnvInitialization(error)
+                })?
         }
-        Ok(self_instance)
+
+        Ok(wrapped_instance)
     }
 
     /// Gets the [`Module`] associated with this instance.
